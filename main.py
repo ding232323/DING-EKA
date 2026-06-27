@@ -2,11 +2,12 @@
 EKA — Enterprise Knowledge Agent CLI
 
 用法:
-    python -m eka.main                        # 交互模式（Streaming）
-    python -m eka.main --demo                 # 演示模式
-    python -m eka.main --eval                 # 评估模式
-    python -m eka.main --compare              # 手写 vs LangChain RAG 性能对比
-    python -m eka.main --question "问题"      # 单次问答
+    python -m eka.main                           # 交互模式（默认 LangChain）
+    python -m eka.main --engine handwritten      # 交互模式（手写引擎）
+    python -m eka.main --demo                    # 演示模式
+    python -m eka.main --eval                    # 评估模式
+    python -m eka.main --compare                 # 手写 vs LangChain RAG 性能对比
+    python -m eka.main --question "问题"         # 单次问答
 """
 import sys
 import json
@@ -27,7 +28,7 @@ from eka.guard import InputGuard, OutputGuard, AuditLogger
 from eka.evaluation import run_evaluation
 
 
-def init_system(rag_engine: str = "handwritten"):
+def init_system(rag_engine: str = "langchain"):
     """初始化：加载 RAG 索引 + 注入工具（RAG 失败不阻断）"""
     print(f"  RAG 引擎: {rag_engine}")
     rag = RAGManager(engine=rag_engine)
@@ -48,13 +49,14 @@ def init_system(rag_engine: str = "handwritten"):
 
 # ── 交互模式 ──────────────────────────────────────
 
-def interactive_mode():
+def interactive_mode(engine: str = "langchain"):
     print("\n" + "=" * 55)
     print("  EKA — 企业知识库智能助手 v1.0")
     print("  输入 'quit' 退出 | 'clear' 清除记忆 | 'stats' 查看状态")
+    print("        'engine' 切换 RAG 引擎 | 'compare' 性能对比")
     print("=" * 55)
 
-    rag, mem, agent = init_system()
+    rag, mem, agent = init_system(engine)
     guard = InputGuard()
     audit = AuditLogger()
     out_guard = OutputGuard()
@@ -79,6 +81,24 @@ def interactive_mode():
             print(f"短期记忆: {mem.short_term.message_count} 条")
             print(f"长期记忆: {mem.long_term.count} 条")
             print(f"RAG 索引: {rag.engine.retriever.size if hasattr(rag.engine, 'retriever') else 'N/A'} 条")
+            continue
+        if user_input.lower() == "engine":
+            new_engine = "handwritten" if rag.engine_name == "langchain" else "langchain"
+            print(f"\n切换 RAG 引擎: {rag.engine_name} → {new_engine}")
+            rag, mem, agent = init_system(new_engine)
+            continue
+        if user_input.lower() == "compare":
+            from eka.config import KNOWLEDGE_DIR as kd
+            result = compare_rag_performance("小米14 Ultra 摄像头配置", kd)
+            print(f"\n{'引擎':<15} {'索引耗时':<12} {'检索耗时':<12} {'结果数'}")
+            print("-" * 55)
+            for eng, data in result.items():
+                if eng == "comparison":
+                    continue
+                print(f"{eng:<15} {data['indexing_ms']:<8.1f}ms   "
+                      f"{data['search_ms']:<8.1f}ms   {data['num_results']}")
+            comp = result["comparison"]
+            print(f"\n加速比: 索引 {comp['indexing_speedup']}, 检索 {comp['search_speedup']}")
             continue
 
         # 安全检查
@@ -113,9 +133,9 @@ def interactive_mode():
 
 # ── 演示模式 ──────────────────────────────────────
 
-def demo_mode():
+def demo_mode(engine: str = "langchain"):
     """演示：4 个典型场景"""
-    rag, mem, agent = init_system()
+    rag, mem, agent = init_system(engine)
 
     demos = [
         {
@@ -172,9 +192,9 @@ def demo_mode():
 
 # ── 评估模式 ──────────────────────────────────────
 
-def eval_mode():
+def eval_mode(engine: str = "langchain"):
     print("EKA 评估模式 — LLM-as-Judge\n")
-    rag, mem, agent = init_system()
+    rag, mem, agent = init_system(engine)
 
     test_cases = [
         {
@@ -228,8 +248,8 @@ def compare_mode():
 
 # ── 单次问答模式 ──────────────────────────────────
 
-def single_question(question: str):
-    rag, mem, agent = init_system()
+def single_question(question: str, engine: str = "langchain"):
+    rag, mem, agent = init_system(engine)
     result = agent.run(question, stream=True)
     print(f"\n工具调用: {result.get('tool_calls', 0)} 次, "
           f"轮次: {result.get('turns', 0)}")
@@ -237,21 +257,34 @@ def single_question(question: str):
 
 # ── 入口 ──────────────────────────────────────────
 
+def _parse_engine(default: str = "langchain") -> str:
+    """从命令行参数中提取 --engine / -e 的值"""
+    for flag in ("--engine", "-e"):
+        if flag in sys.argv:
+            idx = sys.argv.index(flag)
+            if idx + 1 < len(sys.argv):
+                val = sys.argv[idx + 1].lower()
+                if val in ("langchain", "handwritten"):
+                    return val
+                print(f"无效引擎 '{val}'，有效值: langchain, handwritten。使用默认值。")
+    return default
+
 def main():
+    engine = _parse_engine()
     if "--demo" in sys.argv:
-        demo_mode()
+        demo_mode(engine)
     elif "--eval" in sys.argv:
-        eval_mode()
+        eval_mode(engine)
     elif "--compare" in sys.argv:
         compare_mode()
     elif "--question" in sys.argv:
         idx = sys.argv.index("--question")
         if idx + 1 < len(sys.argv):
-            single_question(sys.argv[idx + 1])
+            single_question(sys.argv[idx + 1], engine)
         else:
             print("用法: python -m eka.main --question \"你的问题\"")
     else:
-        interactive_mode()
+        interactive_mode(engine)
 
 
 if __name__ == "__main__":
