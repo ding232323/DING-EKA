@@ -243,8 +243,9 @@ class VectorLongTermMemory:
         try:
             emb = self.embed_gen.embed(fact)
         except Exception:
-            # 嵌入 API 不可用时降级：使用零向量占位
-            emb = [0.0] * 1536
+            # 动态获取模型维度，而不是硬编码 1536
+            emb = [0.0] * self.embed_gen.dim  # 假设 embed_gen 有个 dim 属性
+            # 或者直接生成一个空列表，让 ChromaDB 自动适应（但 ChromaDB 不支持自动适应，必须固定维度）
 
         cid = f"mem_{self.collection.count() + 1}"
         self.collection.add(
@@ -277,8 +278,10 @@ class VectorLongTermMemory:
             return []
 
         facts = []
-        docs = results.get("documents", [[]])[0]
-        emb_list = results.get("embeddings", [[]])[0]
+        docs = results.get("documents") or [[]]
+        docs = docs[0]
+        emb_list = results.get("embeddings") or [[]]
+        emb_list = emb_list[0]
         for doc, emb in zip(docs, emb_list):
             if emb:
                 score = cosine_similarity(query_vec, emb)
